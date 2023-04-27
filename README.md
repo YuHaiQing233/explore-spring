@@ -59,7 +59,7 @@ public class SpringApplication {
 SpringApplication类是一个引导创建启动Spring应用程序的引导类
 ```
 
-**new SpringApplication(primarySources) 分析**
+**分析 new SpringApplication(primarySources)**
 ```java
 public class SpringApplication {
 
@@ -116,3 +116,77 @@ public class SpringApplication {
 }
 ```
 
+**分析 new SpringApplication(primarySources).run(args)**
+```java
+
+public class SpringApplication {
+
+    /**
+     * 分析SpringApplication.run()的整个执行流程
+     * 
+     * 整体功能点: 运行Spring应用程序，创建并刷新一个新的ApplicationContext。
+     * 
+     * @param args
+     * @return
+     */
+    public ConfigurableApplicationContext run(String... args) {
+        
+        // 整个Spring容器启动的开始时间（此时还在准备阶段）
+        long startTime = System.nanoTime();
+        
+        // 创建一个引导上下文对象，此对象的作用在于创建出Spring容器之前，用来保存一下实例化对象，提供给后续创建Spring容器的过程使用
+        DefaultBootstrapContext bootstrapContext = createBootstrapContext();
+        ConfigurableApplicationContext context = null;
+        
+        // 设置该应用程序,即使没有检测到显示器,也允许其启动.
+        configureHeadlessProperty();
+        
+        // 创建SpringApplicationRunListener的集合对象
+        // 并且初始化 MATA-INF/spring.factories文件中的SpringApplicationRunListener接口的实现类EventPublishingRunListener
+        // 而 EventPublishingRunListener初始化的时候不仅会创建一个SimpleApplicationEventMulticaster对象，而且还会将上面分析的ApplicationListener的相关实现添加到事件监听者集合中，以便与收到消息后通知这些监听者
+        SpringApplicationRunListeners listeners = getRunListeners(args);
+        
+        // 此代码做了以下几件事
+        // 第一：创建了一个名为 spring.boot.application.starting 的启动步骤
+        // 第二：调用EventPublishingRunListener.starting()方法向所有的ApplicationListener监听者发送一个 ApplicationStartingEvent 消息
+        // 第三：给启动步骤设置Tag
+        // 第四：启动步骤调用end()方法，表示当前步骤已结束
+        listeners.starting(bootstrapContext, this.mainApplicationClass);
+        
+        try {
+            
+            
+            ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
+            ConfigurableEnvironment environment = prepareEnvironment(listeners, bootstrapContext, applicationArguments);
+            configureIgnoreBeanInfo(environment);
+            Banner printedBanner = printBanner(environment);
+            context = createApplicationContext();
+            context.setApplicationStartup(this.applicationStartup);
+            prepareContext(bootstrapContext, context, environment, listeners, applicationArguments, printedBanner);
+            refreshContext(context);
+            afterRefresh(context, applicationArguments);
+            Duration timeTakenToStartup = Duration.ofNanos(System.nanoTime() - startTime);
+            if (this.logStartupInfo) {
+                new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), timeTakenToStartup);
+            }
+            listeners.started(context, timeTakenToStartup);
+            callRunners(context, applicationArguments);
+        }
+        catch (Throwable ex) {
+            handleRunFailure(context, ex, listeners);
+            throw new IllegalStateException(ex);
+        }
+        try {
+            Duration timeTakenToReady = Duration.ofNanos(System.nanoTime() - startTime);
+            listeners.ready(context, timeTakenToReady);
+        }
+        catch (Throwable ex) {
+            handleRunFailure(context, ex, null);
+            throw new IllegalStateException(ex);
+        }
+        return context;
+    }
+    
+}
+
+```
