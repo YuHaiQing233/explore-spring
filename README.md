@@ -284,33 +284,86 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader
             prepareBeanFactory(beanFactory);
 
             try {
-                // Allows post-processing of the bean factory in context subclasses.
+                // 上下文子类(AnnotationConfigServletWebServerApplicationContext) 中拓展BeanFactory
+                // 第一步：向beanFactory增加WebApplicationContextServletContextAwareProcessor Bean后置处理器；
+                //        向beanFactory增加忽略依赖接口（自动注入时需要忽略的） ServletContextAware；
+                //        注册Web应用程序范围(request、session，如果这两个scope原本就存在与beanFactory中，那么最终使用的还是原值)，指定class对象注入的值（ServletRequest、ServletResponse、HttpSession、WebRequest）
+                // 第二步：如果basePackages不为空，则进行扫描并且将此包内的beanDefinitions注册到beanFactory
+                //        如果annotatedClasses不为空的情况下匹配符合条件的beanDefinition注册到beanFactory中
                 postProcessBeanFactory(beanFactory);
 
+                // 创建beanPostProcess步骤
                 StartupStep beanPostProcess = this.applicationStartup.start("spring.context.beans.post-process");
-                // Invoke factory processors registered as beans in the context.
+
+
+                /**
+                 * 特别说明：
+                 *      1. @Import、@Bean 对应的beanDefinition在这里向BeanDefinitionRegistry注册
+                 *      2. ${...} ,在此步骤会尝试替换beanFactory中每个beanDefinition中占位符中的值
+                 */
+
+                // 第一部分：调用beanFactory的后置处理器
+                // 
+                //     1. 将上下文中的beanFactoryPostprocess区分出普通的后置处理（regularPostProcessors）和beanDefinition后置处理器（registryProcessors）
+                //     2. 从beanFactory中beanDefinitionNames和manualSingletonNames中 BeanDefinitionRegistryPostProcessor & PriorityOrdered 接口的实现类，并保存至 currentRegistryProcessors
+                //     3. 将currentRegistryProcessors进行排序之后，并入 registryProcessors集合中
+                //     4. 调用 currentRegistryProcessors 集合中的ConfigurationClassPostProcessor#postProcessBeanDefinitionRegistry,作用是将@Import与@Bean注解修饰的类注册到BeanDefinitionRegistry中，并且这一步骤包含在一个名为spring.context.beandef-registry.post-process的步骤中；
+                //     5. 清理currentRegistryProcessors集合；
+                //     6. 从beanFactory中beanDefinitionNames和manualSingletonNames中 BeanDefinitionRegistryPostProcessor & Ordered 接口的实现类，并保存至 currentRegistryProcessors，再次执行以上操作；
+                //     7. 最后重复第6步的操作，匹配条件只剩下 BeanDefinitionRegistryPostProcessor 即可执行后续操作
+                //     8. 下面的步骤类似以上几步，将BeanFactoryPostProcessor的实现按照PriorityOrdered、Ordered和其他进行分类保存，而后排序并且调用beanFactory后置处理器
+                //     9. 清除缓存合并的bean定义
+                // 第二部分：如果在此期间发现 LoadTimeWeaver，检测并织入
                 invokeBeanFactoryPostProcessors(beanFactory);
 
-                // Register bean processors that intercept bean creation.
+                // 创建注册BeanPostProcessor
+                // 从beanFactory中获取所有的beanPostProcessor的beanDefinition,并且按照PriorityOrdered、Ordered、internal和其他这几种类型进行分类，最终依次创建实例并且织入BeanFactory中
+                // 在首尾处分别新增了BeanPostProcessorChecker与ApplicationListenerDetector
                 registerBeanPostProcessors(beanFactory);
+                
+                // spring.context.beans.post-process 标志着结束
                 beanPostProcess.end();
 
-                // Initialize message source for this context.
+                // 初始化一个MessageSource，国际化相关支持
                 initMessageSource();
 
-                // Initialize event multicaster for this context.
+                // 初始化一个事件广播器
                 initApplicationEventMulticaster();
 
-                // Initialize other special beans in specific context subclasses.
+                // 初始化上下文子类中的其他特殊bean, SpringBoot + Servlet + 内嵌Tomcat = 创建尚未启动的内嵌Web服务器
+                // 1. 初始化一个ThemeSource
+                // 2. 创建Web服务器
+                //     a: Web服务器不存在且servletContext不存在
+                //         第一：创建 spring.boot.webserver.create 步骤
+                //         第二：获取Web服务器工厂
+                //         第三：步骤记录Tag
+                //         第四：通过工厂对象创建Web服务器
+                //         第五：步骤结束
+                //         第六：创建并注册 webServerGracefulShutdown（作用：优雅关闭webServer）、webServerStartStop （作用：启动与停止WebServer）
+                // 3. 初始化Servlet属性源
                 onRefresh();
 
-                // Check for listener beans and register them.
+                // 注册监听者
+                // 第一： 获取并注册静态指定的监听者（例如：org.springframework.boot.context.logging.LoggingApplicationListener）
+                // 第二：从beanFactory的beanDefinition中匹配ApplicationListener的实现类的beanName,暂未加入到订阅列表中
+                // 第三：将earlyApplicationEvents中的应用事件广播出去
                 registerListeners();
 
-                // Instantiate all remaining (non-lazy-init) singletons.
+                // 实例化所有非懒加载的单例
+                // 第一步：给上下文实例化转换服务（ConversionService，如：用以支持 字符串转换为Long，字符串转换为日期等）
+                // 第二步：如果不存在嵌入式解析器的话，向beanFactory织入一个嵌入式解析器
+                // 第三步：如果存在 LoadTimeWeaverAware接口类的实现beanDefinition，则实例化这些Bean
+                // 第四步：停止使用临时的类加载器进行类型匹配
+                // 第五步：冻结bean definition metadata,不允许再修改，并且缓存冻结后的 bean definition names
+                // 第六步：开始实例化所有的非懒加载的单例（后续单独分析实例化Bean流程）
                 finishBeanFactoryInitialization(beanFactory);
 
-                // Last step: publish corresponding event.
+                // 发布相应的事件
+                // 第一步：清除上下文级资源缓存
+                // 第二步：初始化上下文中的bean生命周期管理器（DefaultLifecycleProcessor）
+                // 第三步：检索所有的适用的生命周期bean，并启动此组件
+                // 第四步：发布最终事件（ContextRefreshedEvent）
+                // 第五步：后续研究
                 finishRefresh();
             }
 
@@ -320,10 +373,10 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader
                             "cancelling refresh attempt: " + ex);
                 }
 
-                // Destroy already created singletons to avoid dangling resources.
+                // 销毁已经创建的单例以避免悬空资源。
                 destroyBeans();
 
-                // Reset 'active' flag.
+                // 重置活动标志
                 cancelRefresh(ex);
 
                 // Propagate exception to caller.
@@ -331,9 +384,11 @@ public abstract class AbstractApplicationContext extends DefaultResourceLoader
             }
 
             finally {
-                // Reset common introspection caches in Spring's core, since we
-                // might not ever need metadata for singleton beans anymore...
+                
+                // 重置Spring的常见反射元数据缓存
                 resetCommonCaches();
+                
+                // 标志refresh结束
                 contextRefresh.end();
             }
         }
