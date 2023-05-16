@@ -508,37 +508,237 @@ public interface MergedBeanDefinitionPostProcessor extends BeanPostProcessor {
     CommonAnnotationBeanPostProcessor：
         1. CommonAnnotationBeanPostProcessor#postProcessMergedBeanDefinition(..)  --->  super.postProcessMergedBeanDefinition(beanDefinition, beanType, beanName);  此处就是支持@PostConstruct @PreDestroy注解修饰的方法，以便在合适的时机回调这些方法；
         2. CommonAnnotationBeanPostProcessor#postProcessMergedBeanDefinition(..)  --->  InjectionMetadata metadata = findResourceMetadata(beanName, beanType, null); 此处是查找@Resource 修饰的属性，以便在合适的时候进行注入；
+    
+    AbstractAutoProxyCreator（AOP实现原理）:
+        0. 此类为实现AOP的具体实现类;  源码调用步骤： AbstractApplicationContext.refresh()  --->  finishBeanFactoryInitialization(beanFactory);  ---> beanFactory.preInstantiateSingletons();  ---> DefaultListableBeanFactory.preInstantiateSingletons()  --->  AbstractBeanFactory.getBean(String name)  ---> doGetBean(...) ---> AbstractAutowireCapableBeanFactory.createBean(...)  ---> doCreateBean(...)   --->  initializeBean(...)  --->  wrappedBean = applyBeanPostProcessorsAfterInitialization(wrappedBean, beanName);  初始化完对象实例之后，调用 BeanPostProcessor中的 postProcessAfterInitialization() 方法来对实例化后的对象创建代理；                                                                                                   
+
+    ApplicationContextAwareProcessor：
+        1. 此bean的后置处理器是用来完成 相关对象的注入支持一下注解接口（EnvironmentAware、MessageSourceAware、ResourceLoaderAware、ApplicationContextAware、EmbeddedValueResolverAware、ApplicationEventPublisherAware）;
+        2. 以上功能完成的接口是 postProcessBeforeInitialization(...) 方法内完成；
 
 ```
 
-### BeanPostProcessor
-### InstantiationAwareBeanPostProcessor
-### DestructionAwareBeanPostProcessor
-### BeanPostProcessor ---> InstantiationAwareBeanPostProcessor ---> SmartInstantiationAwareBeanPostProcessor ---> AbstractAutoProxyCreator ---> AbstractAdvisorAutoProxyCreator ---> AspectJAwareAdvisorAutoProxyCreator  [AOP的后置处理器]
-
-
-
-### ApplicationContextAwareProcessor
-#### EnvironmentAware
-#### ResourceLoaderAware
-#### MessageSourceAware
-#### EmbeddedValueResolverAware
-#### ApplicationContextAware
-#### ApplicationEventPublisherAware
-
 ### ApplicationContextInitializer
 
+**ApplicationContextInitializer 作用**
+```java
 
-### @PostConstruct
-### @PreDestroy
-### InitializingBean
-### DisposableBean
+/**
+ * 此接口用于在Spring容器刷新之前执行的一个回调函数，通常用于想Spring容器注入属性
+ * @param <C>
+ */
+@FunctionalInterface
+public interface ApplicationContextInitializer<C extends ConfigurableApplicationContext> {
+    
+    /**
+     * 初始化给定的应用程序上下文。
+     * @param applicationContext
+     */
+	void initialize(C applicationContext);
 
-### CommandLineRunner
-### ApplicationRunner
+}
 
-### BeanDefinition
+```
+
+**分析ApplicationContextInitializer**
+```text
+
+实例化时机：
+    1. 源码位置：SpringApplication.run(..)  --->  new SpringApplication(primarySources).run(args)  --->  setInitializers((Collection) getSpringFactoriesInstances(ApplicationContextInitializer.class)); ApplicationContextInitializer子实现类就是在此时注册到BeanFactory的
+    2. 实例化步骤：先根据ApplicationContextInitializer.class类型获取所有的bean后置处理器的beanName,然后通过beanName获取到beanDefinition然后实例化对象
+
+调用时机：
+    1. 在源码的 SpringApplication.run(String... args)  --->  prepareContext(bootstrapContext, context, environment, listeners, applicationArguments, printedBanner);  --->  applyInitializers(context); 此处回调ApplicationContextInitializer.initialize(C applicationContext) 方法；
+
+作用：
+    1. 在Spring容器刷新之前进行一些准备；
+
+应用场景：
+    DelegatingApplicationContextInitializer：
+        1. 获取配置 context.initializer.classes 中的其他初始化器，进行实例化，并且完成回调；
+    PropertySourceBootstrapConfiguration：
+        1. 此初始化器是用来在Spring容器刷新之前，加载配置信息并同步到ConfigurableEnvironment中；
+        2. 使用Nacos作为注册中心就是使用了这种方式
+
+```
+
+### @PostConstruct @PreDestroy & InitializingBean DisposableBean
+
+**Spring Bean 初始化时与销毁时的回调**
+```java
+
+package com.explore.controller;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.web.bind.annotation.RestController;
+
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
+
+/**
+ * @author: YuHaiQing
+ * @time: 2023/5/11 17:19
+ */
+@Slf4j
+@RestController
+public class UserController implements InitializingBean, DisposableBean {
+
+    @PostConstruct
+    public void initMethod(){
+        log.info("初始化 ---> UserController类初始化时调用了initMethod");
+    }
+
+    @PreDestroy
+    public void destroyMethod(){
+        log.info("销毁时  --->  UserController类销毁时调用了destroyMethod");
+    }
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        log.info("实例化  --->  afterPropertiesSet");
+    }
+
+    @Override
+    public void destroy() throws Exception {
+        log.info("销毁时 ---> destroy");
+    }
+}
+
+```
+**执行结果**
+```text
+
+Connected to the target VM, address: '127.0.0.1:53623', transport: 'socket'
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v2.7.2)
+
+2023-05-14 16:53:57.759  INFO 4332 --- [           main] c.explore.BeanPostProcessorApplication   : Starting BeanPostProcessorApplication using Java 11.0.14 on YuHaiQing with PID 4332 (E:\project\github\explore-spring\explore-bean-post-processor\target\classes started by YuHaiQing in E:\project\github\explore-spring)
+2023-05-14 16:53:57.759  INFO 4332 --- [           main] c.explore.BeanPostProcessorApplication   : No active profile set, falling back to 1 default profile: "default"
+2023-05-14 16:53:58.279  INFO 4332 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port(s): 8080 (http)
+2023-05-14 16:53:58.279  INFO 4332 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2023-05-14 16:53:58.279  INFO 4332 --- [           main] org.apache.catalina.core.StandardEngine  : Starting Servlet engine: [Apache Tomcat/9.0.65]
+2023-05-14 16:53:58.349  INFO 4332 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2023-05-14 16:53:58.349  INFO 4332 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 550 ms
+2023-05-14 16:53:58.369  INFO 4332 --- [           main] com.explore.controller.UserController    : 初始化 ---> UserController类初始化时调用了initMethod
+2023-05-14 16:53:58.369  INFO 4332 --- [           main] com.explore.controller.UserController    : 实例化  --->  afterPropertiesSet
+2023-05-14 16:53:58.529  INFO 4332 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8080 (http) with context path ''
+2023-05-14 16:53:58.539  INFO 4332 --- [           main] c.explore.BeanPostProcessorApplication   : Started BeanPostProcessorApplication in 1.009 seconds (JVM running for 1.899)
+```
+```text
+Disconnected from the target VM, address: '127.0.0.1:53623', transport: 'socket'
+2023-05-14 16:54:08.655  INFO 4332 --- [ionShutdownHook] com.explore.controller.UserController    : 销毁时  --->  UserController类销毁时调用了destroyMethod
+2023-05-14 16:54:08.655  INFO 4332 --- [ionShutdownHook] com.explore.controller.UserController    : 销毁时 ---> destroy
+```
+
+**区别与联系**
+```text
+区别：
+    1. @PostContract 和 @PreDestroy @Bean(initMethod = "") 是JDK自带的注解，Spring对其提供了支持；
+    2. InitializingBean 和 DisposableBean 这两个接口为Spring提供的接口； 
+
+联系：
+    1. @PostContract 与 InitializingBean 都提供了Bean初始化时，调用初始化方法，以便在初始化时进行调用
+    2. @PreDestroy 与 DisposableBean 都提供了Bean销毁时，回调的方法，在销毁Bean之前进行回调；
+
+```
+
+### CommandLineRunner & ApplicationRunner
+```java
+@FunctionalInterface
+public interface CommandLineRunner {
+
+	/**
+	 * Callback used to run the bean.
+	 * @param args incoming main method arguments
+	 * @throws Exception on error
+	 */
+	void run(String... args) throws Exception;
+
+}
+```
+```java
+@FunctionalInterface
+public interface ApplicationRunner {
+
+	/**
+	 * Callback used to run the bean.
+	 * @param args incoming application arguments
+	 * @throws Exception on error
+	 */
+	void run(ApplicationArguments args) throws Exception;
+
+}
+```
+
+```text
+
+调用时机：
+    0. 源码： SpringApplication.run(String... args) ---> callRunners(context, applicationArguments); 
+    1. 都是在Spring容器启动成功后调用；
+    2. 可以用来初始化线程池、加载热数据；
+
+区别：
+    1. 两个接口的入参是不同的 ；
+    
+相同点：
+    1. 接口中的方法名都是run方法；
+    2. 在 run 方法内部抛出异常时, 应用都将无法正常启动；
+    3. 都可以获取到启动时指定的外部参数。
+
+
+执行顺序：
+    1. ApplicationRunner > CommandLineRunner;
+```
 
 ### FactoryBean
 
-### Spring AOP
+```text
+
+1. FactoryBean包装一个对象，使用getObject()方法来获取真正的实例化对象;
+2. FactoryBean包装的对象一般来自第三方，无法添加@Component等注解，就无法直接被Spring管理;
+3. 这些对象是已经被实例化了的，有统一的来源，例如来自Mybatis;
+4. 当然也可以自定义一个bean，使用FactoryBean来包装，但这好像是多余的。@Bean注解可以很好的解决需要自定义实例化、初始化过程的bean;
+
+```
+
+
+### BeanDefinition
+
+```text
+BeanDefinition 是定义 Bean 的配置元信息接口，包含：
+    1. Bean 的类名
+    2. 设置父 bean 名称、是否为 primary、
+    3. Bean 行为配置信息，作用域、自动绑定模式、生命周期回调、延迟加载、初始方法、销毁方法等
+    4. Bean 之间的依赖设置，dependencies
+    5. 构造参数、属性设置
+```
+
+
+### AOP 
+
+**初始化时机**
+```text
+
+1. AbstractAutowireCapableBeanFactory#createBean(String beanName, RootBeanDefinition mbd, @Nullable Object[] args)
+2. Object bean = resolveBeforeInstantiation(beanName, mbdToUse);
+3. bean = applyBeanPostProcessorsBeforeInstantiation(targetType, beanName);
+4. Object result = bp.postProcessBeforeInstantiation(beanClass, beanName);
+5. AbstractAutoProxyCreator#postProcessBeforeInstantiation(Class<?> beanClass, String beanName)
+6. shouldSkip(beanClass, beanName)
+7. AnnotationAwareAspectJAutoProxyCreator#findCandidateAdvisors()
+8. advisors.addAll(this.aspectJAdvisorsBuilder.buildAspectJAdvisors());
+9. BeanFactoryAspectJAdvisorsBuilder#buildAspectJAdvisors()
+10. List<Advisor> classAdvisors = this.advisorFactory.getAdvisors(factory);
+11. ReflectiveAspectJAdvisorFactory#getAdvisors(MetadataAwareAspectInstanceFactory aspectInstanceFactory)
+12. Advisor advisor = getAdvisor(method, lazySingletonAspectInstanceFactory, 0, aspectName);
+13. return new InstantiationModelAwarePointcutAdvisorImpl(expressionPointcut, candidateAdviceMethod, this, aspectInstanceFactory, declarationOrderInAspect, aspectName);
+
+```
